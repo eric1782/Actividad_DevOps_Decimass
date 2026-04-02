@@ -51,19 +51,7 @@ jobs:
       - name: "Checkout Code"
         uses: actions/checkout@v4
 
-      # STEP 2: Instala y configura Java 21 en la VM
-      # Necesario para que Maven pueda compilar el proyecto Spring Boot
-      # antes de que Docker construya la imagen.
-      #   · java-version: versión del JDK a instalar.
-      #   · distribution: 'temurin' es la distribución open-source de Eclipse (recomendada).
-      #   · cache: 'maven' cachea las dependencias de Maven entre ejecuciones
-      #     para acelerar los builds posteriores.
-      - name: "Set up JDK 21"
-        uses: actions/setup-java@v4
-        with:
-          java-version: '21'
-          distribution: 'temurin'
-          cache: 'maven'
+  
 
       # STEP 3: Inicia sesión en Docker Hub
       # Las credenciales se leen desde los Secrets del repositorio
