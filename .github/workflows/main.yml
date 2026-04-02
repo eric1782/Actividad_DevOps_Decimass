@@ -1,0 +1,134 @@
+# ============================================================
+# WORKFLOW: CD - Construcción y publicación de imagen Docker
+# ============================================================
+# Este workflow forma parte del pipeline de Entrega Continua (CD).
+# Su responsabilidad es construir la imagen Docker de la aplicación
+# y subirla automáticamente a Docker Hub cada vez que hay cambios
+# en las ramas estables.
+# ============================================================
+
+name: "CD: Build and Push to Docker Hub"
+
+# ------------------------------------------------------------
+# DISPARADORES: ¿Cuándo se ejecuta este workflow?
+# ------------------------------------------------------------
+on:
+  push:
+    # Se activa automáticamente cuando se hace push a estas ramas.
+    # "main" es la rama de producción y "fix/workflows" es una rama
+    # temporal de ajuste. En proyectos estables, normalmente solo
+    # se deja "main".
+    branches: [ "main", "fix/workflows" ]
+
+  # Permite lanzar el workflow manualmente desde la pestaña
+  # "Actions" de GitHub, sin necesidad de hacer un push.
+  # Útil para redespliegues de emergencia o pruebas puntuales.
+  workflow_dispatch:
+
+# ------------------------------------------------------------
+# JOBS: Unidades de trabajo del workflow
+# ------------------------------------------------------------
+jobs:
+
+  # Este workflow tiene un único job que agrupa todo el proceso
+  # de construcción y publicación en una sola máquina virtual.
+  build-and-push:
+    name: "Build Docker Image & Push"
+
+    # GitHub provee una máquina virtual con Ubuntu en su versión
+    # más reciente disponible (recomendado para compatibilidad).
+    runs-on: ubuntu-latest
+
+    # ----------------------------------------------------------
+    # STEPS: Pasos secuenciales dentro del job
+    # Cada step falla si el anterior falla (comportamiento por defecto).
+    # ----------------------------------------------------------
+    steps:
+
+      # STEP 1: Descarga el código fuente del repositorio
+      # Sin este paso, la VM de GitHub no tiene acceso a nuestros archivos.
+      # @v4 es la versión estable actual de esta action oficial.
+      - name: "Checkout Code"
+        uses: actions/checkout@v4
+
+      # STEP 2: Instala y configura Java 21 en la VM
+      # Necesario para que Maven pueda compilar el proyecto Spring Boot
+      # antes de que Docker construya la imagen.
+      #   · java-version: versión del JDK a instalar.
+      #   · distribution: 'temurin' es la distribución open-source de Eclipse (recomendada).
+      #   · cache: 'maven' cachea las dependencias de Maven entre ejecuciones
+      #     para acelerar los builds posteriores.
+      - name: "Set up JDK 21"
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      # STEP 3: Inicia sesión en Docker Hub
+      # Las credenciales se leen desde los Secrets del repositorio
+      # (Settings → Secrets and variables → Actions) y NUNCA se
+      # escriben en texto plano en el código.
+      #   · DOCKERHUB_USERNAME: tu usuario de Docker Hub.
+      #   · DOCKERHUB_TOKEN: Access Token generado en Docker Hub
+      #     (más seguro que usar la contraseña directamente).
+      - name: "Login to Docker Hub"
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # STEP 4: Instala Docker Buildx (constructor avanzado con BuildKit)
+      # Buildx es necesario para usar caché inteligente (gha cache del step 7)
+      # y para poder construir imágenes multi-plataforma en el futuro.
+      #   · driver: docker-container ejecuta el builder dentro de un contenedor
+      #     Docker, que es el modo requerido para aprovechar la caché de GitHub Actions.
+      - name: "Set up Docker Buildx"
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker-container
+
+      # STEP 5: Extrae y genera los metadatos/tags de la imagen
+      # Esta action genera automáticamente los tags que se aplicarán
+      # a la imagen, evitando escribirlos a mano.
+      #   · id: meta → permite referenciar sus outputs en steps posteriores
+      #     con la sintaxis ${{ steps.meta.outputs.tags }}.
+      #   · images: nombre base de la imagen en Docker Hub.
+      #   · tags:
+      #       - type=raw,value=latest → siempre etiqueta la imagen como "latest".
+      #       - type=sha → agrega un tag con el hash corto del commit (ej: sha-a1b2c3d),
+      #         lo que permite rastrear exactamente qué commit originó cada imagen.
+      - name: "Extract Metadata"
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/suscripciones-api
+          tags: |
+            type=raw,value=latest
+            type=sha,value={{sha}}
+
+      # STEP 6: Construye la imagen Docker y la sube a Docker Hub
+      # Este es el paso central del workflow.
+      #   · context: . → usa el directorio raíz del repo como contexto
+      #     de build (donde está el Dockerfile).
+      #   · push: true → después de construir, sube la imagen automáticamente.
+      #   · tags → usa los tags generados por el step "meta" (latest + sha).
+      #   · cache-from/cache-to → reutiliza capas de builds anteriores
+      #     guardadas en la caché nativa de GitHub Actions (type=gha).
+      #     "mode=max" guarda todas las capas intermedias, maximizando
+      #     el ahorro de tiempo en el siguiente build.
+      - name: "Build and Push Image"
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # STEP 7: Mensaje de confirmación final
+      # Simplemente imprime en el log de Actions la URL de la imagen
+      # publicada. Útil para verificar rápidamente el resultado
+      # sin tener que entrar a Docker Hub.
+      - name: "Finalización Exitosa"
+        run: echo "🚀 Imagen subida a Docker Hub ${{ secrets.DOCKERHUB_USERNAME }}/suscripciones-api:latest"
